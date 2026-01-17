@@ -1,0 +1,1288 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pengelolaan Jadwal</title>
+    <!-- Bootstrap CSS -->
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <!-- React -->
+    <script
+      crossorigin
+      src="https://unpkg.com/react@18/umd/react.production.min.js"
+    ></script>
+    <script
+      crossorigin
+      src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"
+    ></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState, useEffect } = React;
+
+      // IndexedDB Helper
+      const DB_NAME = "ScheduleDB";
+      const DB_VERSION = 1;
+      const STORE_NAME = "events";
+
+      const openDB = () => {
+        return new Promise((resolve, reject) => {
+          const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => resolve(request.result);
+
+          request.onupgradeneeded = (event) => {
+            const db = event.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+              db.createObjectStore(STORE_NAME, { keyPath: "id" });
+            }
+          };
+        });
+      };
+
+      const saveEventToDB = async (event) => {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+          const transaction = db.transaction([STORE_NAME], "readwrite");
+          const store = transaction.objectStore(STORE_NAME);
+          const request = store.put(event);
+
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+      };
+
+      const getAllEventsFromDB = async () => {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+          const transaction = db.transaction([STORE_NAME], "readonly");
+          const store = transaction.objectStore(STORE_NAME);
+          const request = store.getAll();
+
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+      };
+
+      const deleteEventFromDB = async (id) => {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+          const transaction = db.transaction([STORE_NAME], "readwrite");
+          const store = transaction.objectStore(STORE_NAME);
+          const request = store.delete(id);
+
+          request.onsuccess = () => resolve();
+          request.onerror = () => reject(request.error);
+        });
+      };
+
+      const clearAllEventsFromDB = async () => {
+        const db = await openDB();
+        return new Promise((resolve, reject) => {
+          const transaction = db.transaction([STORE_NAME], "readwrite");
+          const store = transaction.objectStore(STORE_NAME);
+          const request = store.clear();
+
+          request.onsuccess = () => resolve();
+          request.onerror = () => reject(request.error);
+        });
+      };
+
+      // Utility functions
+      const formatDate = (date) => {
+        const d = new Date(date);
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        const hours = String(d.getHours()).padStart(2, "0");
+        const minutes = String(d.getMinutes()).padStart(2, "0");
+        return `${year}-${month}-${day}T${hours}:${minutes}`;
+      };
+
+      const formatDisplayDate = (date) => {
+        const d = new Date(date);
+        const options = {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        };
+        return d.toLocaleDateString("id-ID", options);
+      };
+
+      const getDaysInMonth = (year, month) => {
+        return new Date(year, month + 1, 0).getDate();
+      };
+
+      const getFirstDayOfMonth = (year, month) => {
+        return new Date(year, month, 1).getDay();
+      };
+
+      // Fungsi untuk auto-backup ke localStorage
+      const autoBackupToLocalStorage = (events) => {
+        try {
+          localStorage.setItem("scheduleBackup", JSON.stringify(events));
+          localStorage.setItem("scheduleBackupTime", new Date().toISOString());
+        } catch (error) {
+          console.error("Auto backup failed:", error);
+        }
+      };
+
+      // Fungsi untuk request notification permission
+      const requestNotificationPermission = async () => {
+        if ("Notification" in window && Notification.permission === "default") {
+          await Notification.requestPermission();
+        }
+      };
+
+      // Fungsi untuk cek dan kirim notifikasi
+      const checkUpcomingEvents = (events) => {
+        if ("Notification" in window && Notification.permission === "granted") {
+          const now = new Date();
+          const upcoming = events.filter((event) => {
+            const eventStart = new Date(event.start);
+            const timeDiff = eventStart - now;
+            // Notifikasi 15 menit sebelum event
+            return (
+              timeDiff > 0 && timeDiff <= 15 * 60 * 1000 && !event.notified
+            );
+          });
+
+          upcoming.forEach((event) => {
+            new Notification("Pengingat Jadwal", {
+              body: `${event.title} akan dimulai dalam 15 menit`,
+              icon: "📅",
+              tag: event.id,
+            });
+            // Tandai sudah dinotifikasi
+            event.notified = true;
+            saveEventToDB(event);
+          });
+        }
+      };
+
+      function ScheduleManager() {
+        const [events, setEvents] = useState([]);
+        const [currentDate, setCurrentDate] = useState(new Date());
+        const [selectedDate, setSelectedDate] = useState(null);
+        const [showModal, setShowModal] = useState(false);
+        const [selectedEvent, setSelectedEvent] = useState(null);
+        const [view, setView] = useState("month");
+        const [loading, setLoading] = useState(false);
+        const [searchQuery, setSearchQuery] = useState("");
+        const [filterDateStart, setFilterDateStart] = useState("");
+        const [filterDateEnd, setFilterDateEnd] = useState("");
+        const [formData, setFormData] = useState({
+          title: "",
+          start: "",
+          end: "",
+          description: "",
+          color: "#3788d8",
+        });
+        const [validationErrors, setValidationErrors] = useState({});
+
+        useEffect(() => {
+          loadEvents();
+          requestNotificationPermission();
+
+          // Cek notifikasi setiap menit
+          const notificationInterval = setInterval(() => {
+            checkUpcomingEvents(events);
+          }, 60000);
+
+          return () => clearInterval(notificationInterval);
+        }, []);
+
+        // Auto backup setiap kali events berubah
+        useEffect(() => {
+          if (events.length > 0) {
+            autoBackupToLocalStorage(events);
+          }
+        }, [events]);
+
+        const loadEvents = async () => {
+          setLoading(true);
+          try {
+            const eventsFromDB = await getAllEventsFromDB();
+            setEvents(eventsFromDB);
+          } catch (error) {
+            console.error("Error loading events:", error);
+            alert(
+              "Gagal memuat data jadwal. Mencoba memulihkan dari backup...",
+            );
+
+            // Coba restore dari localStorage backup
+            try {
+              const backup = localStorage.getItem("scheduleBackup");
+              if (backup) {
+                const backupEvents = JSON.parse(backup);
+                setEvents(backupEvents);
+                alert("Data berhasil dipulihkan dari backup terakhir");
+              }
+            } catch (backupError) {
+              console.error("Backup restore failed:", backupError);
+            }
+          } finally {
+            setLoading(false);
+          }
+        };
+
+        // Validasi form input
+        const validateForm = () => {
+          const errors = {};
+
+          if (!formData.title.trim()) {
+            errors.title = "Judul acara tidak boleh kosong";
+          }
+
+          if (!formData.start) {
+            errors.start = "Waktu mulai harus diisi";
+          }
+
+          if (!formData.end) {
+            errors.end = "Waktu selesai harus diisi";
+          }
+
+          if (formData.start && formData.end) {
+            const startDate = new Date(formData.start);
+            const endDate = new Date(formData.end);
+
+            if (endDate <= startDate) {
+              errors.end = "Waktu selesai harus lebih besar dari waktu mulai";
+            }
+
+            // Validasi tidak boleh di masa lalu (opsional, bisa dihapus jika ingin)
+            const now = new Date();
+            if (!selectedEvent && startDate < now) {
+              errors.start = "Tidak dapat membuat acara di masa lalu";
+            }
+          }
+
+          setValidationErrors(errors);
+          return Object.keys(errors).length === 0;
+        };
+
+        const handleDateClick = (day) => {
+          const clickedDate = new Date(
+            currentDate.getFullYear(),
+            currentDate.getMonth(),
+            day,
+          );
+          setSelectedDate(clickedDate);
+
+          const startTime = new Date(clickedDate);
+          startTime.setHours(9, 0);
+          const endTime = new Date(clickedDate);
+          endTime.setHours(10, 0);
+
+          setFormData({
+            title: "",
+            start: formatDate(startTime),
+            end: formatDate(endTime),
+            description: "",
+            color: "#3788d8",
+          });
+          setSelectedEvent(null);
+          setValidationErrors({});
+          setShowModal(true);
+        };
+
+        const handleEventClick = (event) => {
+          setFormData({
+            title: event.title,
+            start: formatDate(event.start),
+            end: formatDate(event.end),
+            description: event.description || "",
+            color: event.color || "#3788d8",
+          });
+          setSelectedEvent(event);
+          setValidationErrors({});
+          setShowModal(true);
+        };
+
+        const handleSubmit = async () => {
+          // Validasi input terlebih dahulu
+          if (!validateForm()) {
+            return;
+          }
+
+          setLoading(true);
+
+          // Normalisasi data untuk konsistensi timezone (simpan dalam ISO string)
+          const eventData = {
+            id: selectedEvent ? selectedEvent.id : Date.now().toString(),
+            title: formData.title.trim(),
+            start: new Date(formData.start).toISOString(),
+            end: new Date(formData.end).toISOString(),
+            description: formData.description.trim(),
+            color: formData.color,
+            notified: false, // Reset notifikasi untuk event baru/edit
+            createdAt: selectedEvent?.createdAt || new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+
+          try {
+            await saveEventToDB(eventData);
+            await loadEvents();
+            setShowModal(false);
+            setFormData({
+              title: "",
+              start: "",
+              end: "",
+              description: "",
+              color: "#3788d8",
+            });
+            setSelectedEvent(null);
+            setValidationErrors({});
+
+            // Tampilkan feedback sukses
+            showSuccessMessage(
+              selectedEvent
+                ? "Acara berhasil diperbarui"
+                : "Acara berhasil ditambahkan",
+            );
+          } catch (error) {
+            console.error("Error saving event:", error);
+            alert("Gagal menyimpan acara. Silakan coba lagi.");
+          } finally {
+            setLoading(false);
+          }
+        };
+
+        const handleDelete = async () => {
+          if (!selectedEvent) return;
+
+          // Konfirmasi sebelum menghapus
+          const confirmDelete = window.confirm(
+            `Apakah Anda yakin ingin menghapus acara "${selectedEvent.title}"? Tindakan ini tidak dapat dibatalkan.`,
+          );
+
+          if (!confirmDelete) return;
+
+          setLoading(true);
+
+          try {
+            await deleteEventFromDB(selectedEvent.id);
+            await loadEvents();
+            setShowModal(false);
+            setSelectedEvent(null);
+            showSuccessMessage("Acara berhasil dihapus");
+          } catch (error) {
+            console.error("Error deleting event:", error);
+            alert("Gagal menghapus acara. Silakan coba lagi.");
+          } finally {
+            setLoading(false);
+          }
+        };
+
+        const handleExport = () => {
+          try {
+            const dataStr = JSON.stringify(events, null, 2);
+            const dataBlob = new Blob([dataStr], { type: "application/json" });
+            const url = URL.createObjectURL(dataBlob);
+            const link = document.createElement("a");
+            link.href = url;
+            const now = new Date();
+            link.download = `jadwal_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}.json`;
+            link.click();
+            URL.revokeObjectURL(url);
+            showSuccessMessage("Data berhasil diekspor");
+          } catch (error) {
+            console.error("Export error:", error);
+            alert("Gagal mengekspor data. Silakan coba lagi.");
+          }
+        };
+
+        const handleImport = (e) => {
+          const file = e.target.files[0];
+          if (!file) return;
+
+          // Validasi tipe file
+          if (!file.name.endsWith(".json")) {
+            alert("Format file tidak valid. Harap pilih file JSON.");
+            e.target.value = "";
+            return;
+          }
+
+          const reader = new FileReader();
+          reader.onload = async (event) => {
+            setLoading(true);
+            try {
+              const importedEvents = JSON.parse(event.target.result);
+
+              // Validasi struktur data
+              if (!Array.isArray(importedEvents)) {
+                throw new Error(
+                  "Format data tidak valid. Data harus berupa array.",
+                );
+              }
+
+              // Validasi setiap event memiliki properti yang diperlukan
+              const isValidData = importedEvents.every(
+                (evt) => evt.title && evt.start && evt.end && evt.id,
+              );
+
+              if (!isValidData) {
+                throw new Error(
+                  "Data tidak lengkap. Setiap acara harus memiliki title, start, end, dan id.",
+                );
+              }
+
+              const confirmReplace = window.confirm(
+                `Ditemukan ${importedEvents.length} acara. Apakah Anda ingin mengganti semua data yang ada? (Pilih "Cancel" untuk menambahkan tanpa menghapus data lama)`,
+              );
+
+              if (confirmReplace) {
+                await clearAllEventsFromDB();
+              }
+
+              // Simpan semua event yang diimpor
+              for (const evt of importedEvents) {
+                await saveEventToDB({
+                  ...evt,
+                  id: evt.id || Date.now().toString() + Math.random(),
+                  notified: false, // Reset status notifikasi
+                });
+              }
+
+              await loadEvents();
+              showSuccessMessage(
+                `${importedEvents.length} acara berhasil diimpor`,
+              );
+            } catch (error) {
+              console.error("Error importing:", error);
+              alert(
+                `Gagal mengimpor data: ${error.message}\n\nPastikan file JSON valid dan sesuai format.`,
+              );
+            } finally {
+              setLoading(false);
+            }
+          };
+
+          reader.onerror = () => {
+            alert("Gagal membaca file. Silakan coba lagi.");
+            setLoading(false);
+          };
+
+          reader.readAsText(file);
+          e.target.value = "";
+        };
+
+        const showSuccessMessage = (message) => {
+          // Buat toast notification sederhana
+          const toast = document.createElement("div");
+          toast.textContent = message;
+          toast.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #10b981;
+      color: white;
+      padding: 16px 24px;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      z-index: 9999;
+      animation: slideIn 0.3s ease;
+    `;
+          document.body.appendChild(toast);
+
+          setTimeout(() => {
+            toast.style.animation = "slideOut 0.3s ease";
+            setTimeout(() => document.body.removeChild(toast), 300);
+          }, 3000);
+        };
+
+        const nextMonth = () => {
+          setCurrentDate(
+            new Date(currentDate.getFullYear(), currentDate.getMonth() + 1),
+          );
+        };
+
+        const prevMonth = () => {
+          setCurrentDate(
+            new Date(currentDate.getFullYear(), currentDate.getMonth() - 1),
+          );
+        };
+
+        const goToToday = () => {
+          setCurrentDate(new Date());
+        };
+
+        // Filter events berdasarkan search dan date range
+        const getFilteredEvents = () => {
+          let filtered = [...events];
+
+          // Filter berdasarkan search query
+          if (searchQuery.trim()) {
+            filtered = filtered.filter(
+              (event) =>
+                event.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                (event.description &&
+                  event.description
+                    .toLowerCase()
+                    .includes(searchQuery.toLowerCase())),
+            );
+          }
+
+          // Filter berdasarkan date range
+          if (filterDateStart) {
+            filtered = filtered.filter(
+              (event) => new Date(event.start) >= new Date(filterDateStart),
+            );
+          }
+
+          if (filterDateEnd) {
+            const endOfDay = new Date(filterDateEnd);
+            endOfDay.setHours(23, 59, 59);
+            filtered = filtered.filter(
+              (event) => new Date(event.start) <= endOfDay,
+            );
+          }
+
+          return filtered;
+        };
+
+        const renderCalendar = () => {
+          const year = currentDate.getFullYear();
+          const month = currentDate.getMonth();
+          const daysInMonth = getDaysInMonth(year, month);
+          const firstDay = getFirstDayOfMonth(year, month);
+
+          const days = [];
+          const monthNames = [
+            "Januari",
+            "Februari",
+            "Maret",
+            "April",
+            "Mei",
+            "Juni",
+            "Juli",
+            "Agustus",
+            "September",
+            "Oktober",
+            "November",
+            "Desember",
+          ];
+
+          const filteredEvents = getFilteredEvents();
+
+          for (let i = 0; i < firstDay; i++) {
+            days.push(
+              <div key={`empty-${i}`} className="p-2 border bg-light"></div>,
+            );
+          }
+
+          for (let day = 1; day <= daysInMonth; day++) {
+            const dayEvents = filteredEvents.filter((e) => {
+              const eventDate = new Date(e.start);
+              return (
+                eventDate.getFullYear() === year &&
+                eventDate.getMonth() === month &&
+                eventDate.getDate() === day
+              );
+            });
+
+            const isToday =
+              new Date().toDateString() ===
+              new Date(year, month, day).toDateString();
+
+            days.push(
+              <div
+                key={day}
+                className={`p-2 border cursor-pointer hover:bg-blue-50 min-h-24 ${isToday ? "bg-blue-100" : ""}`}
+                onClick={() => handleDateClick(day)}
+              >
+                <div className="font-semibold mb-1">{day}</div>
+                {dayEvents.map((event) => (
+                  <div
+                    key={event.id}
+                    className="text-xs p-1 mb-1 rounded text-white cursor-pointer"
+                    style={{ backgroundColor: event.color }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleEventClick(event);
+                    }}
+                    title={event.title}
+                  >
+                    {event.title.length > 15
+                      ? event.title.substring(0, 15) + "..."
+                      : event.title}
+                  </div>
+                ))}
+              </div>,
+            );
+          }
+
+          return (
+            <div>
+              <div className="d-flex justify-content-between align-items-center mb-3">
+                <button
+                  className="btn btn-outline-primary btn-sm"
+                  onClick={prevMonth}
+                  disabled={loading}
+                >
+                  ‹ Prev
+                </button>
+                <h4>
+                  {monthNames[month]} {year}
+                </h4>
+                <button
+                  className="btn btn-outline-primary btn-sm"
+                  onClick={nextMonth}
+                  disabled={loading}
+                >
+                  Next ›
+                </button>
+              </div>
+              <div className="row row-cols-7 g-0 border">
+                {["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"].map(
+                  (day) => (
+                    <div
+                      key={day}
+                      className="col p-2 border bg-light text-center fw-bold"
+                    >
+                      {day}
+                    </div>
+                  ),
+                )}
+                {days}
+              </div>
+            </div>
+          );
+        };
+
+        const renderListView = () => {
+          const filteredEvents = getFilteredEvents();
+          const sortedEvents = filteredEvents.sort(
+            (a, b) => new Date(a.start) - new Date(b.start),
+          );
+
+          if (sortedEvents.length === 0) {
+            return (
+              <div className="text-center py-5 text-muted">
+                <p>
+                  {searchQuery || filterDateStart || filterDateEnd
+                    ? "Tidak ada acara yang sesuai dengan filter"
+                    : "Belum ada acara yang dijadwalkan"}
+                </p>
+              </div>
+            );
+          }
+
+          return (
+            <div className="list-group">
+              {sortedEvents.map((event) => (
+                <div
+                  key={event.id}
+                  className="list-group-item list-group-item-action cursor-pointer"
+                  onClick={() => handleEventClick(event)}
+                >
+                  <div className="d-flex w-100 justify-content-between align-items-start">
+                    <div>
+                      <div className="d-flex align-items-center gap-2">
+                        <div
+                          style={{
+                            width: "12px",
+                            height: "12px",
+                            backgroundColor: event.color,
+                            borderRadius: "50%",
+                          }}
+                        ></div>
+                        <h5 className="mb-1">{event.title}</h5>
+                      </div>
+                      <p className="mb-1 text-muted small">
+                        {formatDisplayDate(event.start)} -{" "}
+                        {formatDisplayDate(event.end)}
+                      </p>
+                      {event.description && (
+                        <p className="mb-1">{event.description}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          );
+        };
+
+        return (
+          <div className="container-fluid py-4" style={{ maxWidth: "1200px" }}>
+            <div className="row mb-4">
+              <div className="col-12">
+                <h1 className="text-center mb-4">📅 Pengelolaan Jadwal</h1>
+
+                {/* Search and Filter Section */}
+                <div className="bg-white p-3 rounded shadow mb-3">
+                  <div className="row g-2">
+                    <div className="col-md-4">
+                      <input
+                        type="text"
+                        className="form-control"
+                        placeholder="🔍 Cari acara..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                      />
+                    </div>
+                    <div className="col-md-3">
+                      <input
+                        type="date"
+                        className="form-control"
+                        placeholder="Dari tanggal"
+                        value={filterDateStart}
+                        onChange={(e) => setFilterDateStart(e.target.value)}
+                      />
+                    </div>
+                    <div className="col-md-3">
+                      <input
+                        type="date"
+                        className="form-control"
+                        placeholder="Sampai tanggal"
+                        value={filterDateEnd}
+                        onChange={(e) => setFilterDateEnd(e.target.value)}
+                      />
+                    </div>
+                    <div className="col-md-2">
+                      <button
+                        className="btn btn-outline-secondary w-100"
+                        onClick={() => {
+                          setSearchQuery("");
+                          setFilterDateStart("");
+                          setFilterDateEnd("");
+                        }}
+                      >
+                        Reset Filter
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="d-flex justify-content-center gap-2 mb-3 flex-wrap">
+                  <button
+                    className="btn btn-outline-secondary btn-sm"
+                    onClick={goToToday}
+                    disabled={loading}
+                  >
+                    Hari Ini
+                  </button>
+                  <button
+                    className={`btn btn-sm ${view === "month" ? "btn-primary" : "btn-outline-primary"}`}
+                    onClick={() => setView("month")}
+                    disabled={loading}
+                  >
+                    Kalender
+                  </button>
+                  <button
+                    className={`btn btn-sm ${view === "list" ? "btn-primary" : "btn-outline-primary"}`}
+                    onClick={() => setView("list")}
+                    disabled={loading}
+                  >
+                    Daftar
+                  </button>
+                  <button
+                    className="btn btn-success btn-sm"
+                    onClick={handleExport}
+                    disabled={loading}
+                  >
+                    {loading ? "⏳ Memproses..." : "📥 Export JSON"}
+                  </button>
+                  <label
+                    className={`btn btn-primary btn-sm ${loading ? "disabled" : ""}`}
+                  >
+                    📤 Import JSON
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={handleImport}
+                      style={{ display: "none" }}
+                      disabled={loading}
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div className="row">
+              <div className="col-12">
+                {loading && (
+                  <div className="text-center mb-3">
+                    <div className="spinner-border text-primary" role="status">
+                      <span className="visually-hidden">Loading...</span>
+                    </div>
+                  </div>
+                )}
+                <div className="bg-white p-3 rounded shadow">
+                  {view === "month" ? renderCalendar() : renderListView()}
+                </div>
+              </div>
+            </div>
+
+            {showModal && (
+              <div
+                className="modal d-block"
+                style={{ backgroundColor: "rgba(0,0,0,0.5)" }}
+              >
+                <div className="modal-dialog modal-dialog-centered">
+                  <div className="modal-content">
+                    <div className="modal-header">
+                      <h5 className="modal-title">
+                        {selectedEvent ? "Edit Acara" : "Tambah Acara Baru"}
+                      </h5>
+                      <button
+                        type="button"
+                        className="btn-close"
+                        onClick={() => {
+                          setShowModal(false);
+                          setValidationErrors({});
+                        }}
+                        disabled={loading}
+                      ></button>
+                    </div>
+                    <div className="modal-body">
+                      <div className="mb-3">
+                        <label className="form-label">Judul Acara *</label>
+                        <input
+                          type="text"
+                          className={`form-control ${validationErrors.title ? "is-invalid" : ""}`}
+                          value={formData.title}
+                          onChange={(e) =>
+                            setFormData({ ...formData, title: e.target.value })
+                          }
+                          disabled={loading}
+                        />
+                        {validationErrors.title && (
+                          <div className="invalid-feedback">
+                            {validationErrors.title}
+                          </div>
+                        )}
+                      </div>
+                      <div className="mb-3">
+                        <label className="form-label">Waktu Mulai *</label>
+                        <input
+                          type="datetime-local"
+                          className={`form-control ${validationErrors.start ? "is-invalid" : ""}`}
+                          value={formData.start}
+                          onChange={(e) =>
+                            setFormData({ ...formData, start: e.target.value })
+                          }
+                          disabled={loading}
+                        />
+                        {validationErrors.start && (
+                          <div className="invalid-feedback">
+                            {validationErrors.start}
+                          </div>
+                        )}
+                      </div>
+                      <div className="mb-3">
+                        <label className="form-label">Waktu Selesai *</label>
+                        <input
+                          type="datetime-local"
+                          className={`form-control ${validationErrors.end ? "is-invalid" : ""}`}
+                          value={formData.end}
+                          onChange={(e) =>
+                            setFormData({ ...formData, end: e.target.value })
+                          }
+                          disabled={loading}
+                        />
+                        {validationErrors.end && (
+                          <div className="invalid-feedback">
+                            {validationErrors.end}
+                          </div>
+                        )}
+                      </div>
+                      <div className="mb-3">
+                        <label className="form-label">Warna</label>
+                        <input
+                          type="color"
+                          className="form-control form-control-color"
+                          value={formData.color}
+                          onChange={(e) =>
+                            setFormData({ ...formData, color: e.target.value })
+                          }
+                          disabled={loading}
+                        />
+                      </div>
+                      <div className="mb-3">
+                        <label className="form-label">Deskripsi</label>
+                        <textarea
+                          className="form-control"
+                          rows="3"
+                          value={formData.description}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              description: e.target.value,
+                            })
+                          }
+                          disabled={loading}
+                        />
+                      </div>
+                    </div>
+                    <div className="modal-footer">
+                      {selectedEvent && (
+                        <button
+                          type="button"
+                          className="btn btn-danger me-auto"
+                          onClick={handleDelete}
+                          disabled={loading}
+                        >
+                          {loading ? "Menghapus..." : "Hapus"}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => {
+                          setShowModal(false);
+                          setValidationErrors({});
+                        }}
+                        disabled={loading}
+                      >
+                        Batal
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={handleSubmit}
+                        disabled={loading}
+                      >
+                        {loading ? "Menyimpan..." : "Simpan"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <style>{`
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+        
+        @keyframes slideOut {
+          from {
+            transform: translateX(0);
+            opacity: 1;
+          }
+          to {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+        }
+        
+        /* Global Styles */
+        body {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          min-height: 100vh;
+          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        /* Container Styles */
+        .container-fluid {
+          animation: fadeIn 0.5s ease-in;
+        }
+
+        @keyframes fadeIn {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        /* Header Styles */
+        h1 {
+          color: white;
+          text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+          font-weight: 700;
+          margin-bottom: 2rem;
+        }
+
+        /* Button Styles */
+        .btn {
+          transition: all 0.3s ease;
+          border-radius: 8px;
+          font-weight: 500;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .btn:hover:not(:disabled) {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        .btn:active {
+          transform: translateY(0);
+        }
+        
+        .btn:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+        }
+
+        /* Calendar Container */
+        .bg-white {
+          border-radius: 16px;
+          box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+          overflow: hidden;
+        }
+
+        /* Calendar Grid Styles */
+        .row.row-cols-7 {
+          box-shadow: inset 0 0 10px rgba(0,0,0,0.05);
+        }
+
+        .row.row-cols-7 > div {
+          transition: all 0.2s ease;
+        }
+
+        /* Day Header Styles */
+        .bg-light.fw-bold {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+          color: white !important;
+          font-size: 0.9rem;
+          padding: 12px 8px !important;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+        }
+
+        /* Calendar Day Cells */
+        .cursor-pointer {
+          cursor: pointer;
+          position: relative;
+          overflow: hidden;
+        }
+
+        .cursor-pointer::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+          opacity: 0;
+          transition: opacity 0.3s ease;
+        }
+
+        .cursor-pointer:hover::before {
+          opacity: 1;
+        }
+
+        .hover\\:bg-blue-50:hover {
+          background-color: #eff6ff;
+        }
+
+        .bg-blue-100 {
+          background-color: #dbeafe;
+          border: 2px solid #3b82f6 !important;
+          font-weight: 600;
+        }
+
+        .min-h-24 {
+          min-height: 6rem;
+        }
+
+        /* Event Badge Styles */
+        .cursor-pointer .text-white {
+          transition: all 0.2s ease;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+          font-weight: 500;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .cursor-pointer .text-white:hover {
+          transform: scale(1.05);
+          box-shadow: 0 3px 6px rgba(0,0,0,0.3);
+          z-index: 10;
+        }
+
+        /* List View Styles */
+        .list-group-item {
+          transition: all 0.3s ease;
+          border-left: 4px solid transparent;
+          margin-bottom: 8px;
+          border-radius: 8px !important;
+        }
+
+        .list-group-item:hover {
+          border-left-color: #667eea;
+          background-color: #f8f9fa;
+          transform: translateX(5px);
+          box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+
+        /* Modal Styles */
+        .modal-content {
+          border-radius: 16px;
+          border: none;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+          animation: modalSlideIn 0.3s ease;
+        }
+
+        @keyframes modalSlideIn {
+          from {
+            opacity: 0;
+            transform: scale(0.9) translateY(-20px);
+          }
+          to {
+            opacity: 1;
+            transform: scale(1) translateY(0);
+          }
+        }
+
+        .modal-header {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          border-radius: 16px 16px 0 0;
+          padding: 1.5rem;
+        }
+
+        .modal-title {
+          font-weight: 600;
+          font-size: 1.25rem;
+        }
+
+        .modal-body {
+          padding: 2rem;
+        }
+
+        .modal-footer {
+          padding: 1.5rem;
+          border-top: 1px solid #e9ecef;
+        }
+
+        /* Form Styles */
+        .form-label {
+          font-weight: 600;
+          color: #495057;
+          margin-bottom: 0.5rem;
+        }
+
+        .form-control, .form-control-color {
+          border-radius: 8px;
+          border: 2px solid #e9ecef;
+          transition: all 0.3s ease;
+          padding: 0.75rem;
+        }
+
+        .form-control:focus, .form-control-color:focus {
+          border-color: #667eea;
+          box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+        }
+        
+        .form-control.is-invalid {
+          border-color: #dc3545;
+        }
+        
+        .form-control.is-invalid:focus {
+          box-shadow: 0 0 0 0.2rem rgba(220, 53, 69, 0.25);
+        }
+        
+        .invalid-feedback {
+          display: block;
+          color: #dc3545;
+          font-size: 0.875rem;
+          margin-top: 0.25rem;
+        }
+
+        textarea.form-control {
+          resize: vertical;
+        }
+
+        /* Navigation Buttons */
+        .d-flex.justify-content-between h4 {
+          color: #333;
+          font-weight: 700;
+        }
+        
+        /* Loading Spinner */
+        .spinner-border {
+          width: 2rem;
+          height: 2rem;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+          .min-h-24 {
+            min-height: 4rem;
+          }
+
+          .cursor-pointer .text-white {
+            font-size: 0.7rem;
+            padding: 2px 4px !important;
+          }
+
+          .bg-light.fw-bold {
+            font-size: 0.7rem;
+            padding: 8px 4px !important;
+          }
+
+          h1 {
+            font-size: 1.75rem;
+          }
+        }
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+          width: 8px;
+          height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+          background: #f1f1f1;
+          border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+        }
+
+        /* Loading Animation */
+        @keyframes pulse {
+          0%, 100% {
+            opacity: 1;
+          }
+          50% {
+            opacity: 0.5;
+          }
+        }
+
+        /* Empty State */
+        .text-muted {
+          animation: pulse 2s ease-in-out infinite;
+        }
+      `}</style>
+          </div>
+        );
+      }
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<ScheduleManager />);
+    </script>
+  </body>
+</html>
