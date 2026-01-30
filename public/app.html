@@ -4,10 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pengelolaan Jadwal</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet" />
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="./vendor/bootstrap.min.css" rel="stylesheet" />
+    <script crossorigin src="./vendor/react.production.min.js"></script>
+    <script crossorigin src="./vendor/react-dom.production.min.js"></script>
+    <script src="./vendor/babel.min.js"></script>
   </head>
   <body>
     <div id="root"></div>
@@ -188,6 +188,9 @@
         const [searchQuery, setSearchQuery] = useState('');
         const [filterDateStart, setFilterDateStart] = useState('');
         const [filterDateEnd, setFilterDateEnd] = useState('');
+        const [darkMode, setDarkMode] = useState(
+          window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+        );
         const [formData, setFormData] = useState({
           title: '',
           start: '',
@@ -200,6 +203,14 @@
         useEffect(() => {
           loadEvents();
           requestNotificationPermission();
+          
+          // Listener untuk perubahan tema device
+          const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+          const handleThemeChange = (e) => setDarkMode(e.matches);
+          
+          mediaQuery.addListener(handleThemeChange);
+          
+          return () => mediaQuery.removeListener(handleThemeChange);
         }, []);
 
         function loadEvents() {
@@ -603,13 +614,23 @@
         }
 
         return (
-          <div className="app-container">
+          <div className={`app-container ${darkMode ? 'dark-mode' : ''}`}>
             <div className="container-fluid py-4" style={{ maxWidth: '1400px' }}>
-              <h1 className="text-center mb-4">📅 Pengelolaan Jadwal</h1>
+              <div className="d-flex justify-content-between align-items-center mb-4">
+                <h1 className="text-center flex-grow-1 mb-0">📅 Pengelolaan Jadwal</h1>
+                <button 
+                  className="btn btn-sm btn-outline-light"
+                  onClick={() => setDarkMode(!darkMode)}
+                  title="Toggle tema"
+                >
+                  {darkMode ? '☀️' : '🌙'}
+                </button>
+              </div>
               
               <div className="controls-section mb-3">
-                <div className="row g-2">
-                  <div className="col-md-4">
+                <div className="row g-2 align-items-end">
+                  <div className="col-md-3">
+                    <label className="form-label small mb-1">Pencarian</label>
                     <input
                       type="text"
                       className="form-control"
@@ -619,6 +640,7 @@
                     />
                   </div>
                   <div className="col-md-3">
+                    <label className="form-label small mb-1">Tanggal Awal</label>
                     <input
                       type="date"
                       className="form-control"
@@ -627,6 +649,7 @@
                     />
                   </div>
                   <div className="col-md-3">
+                    <label className="form-label small mb-1">Tanggal Akhir</label>
                     <input
                       type="date"
                       className="form-control"
@@ -634,7 +657,8 @@
                       onChange={(e) => setFilterDateEnd(e.target.value)}
                     />
                   </div>
-                  <div className="col-md-2">
+                  <div className="col-md-3">
+                    <label className="form-label small mb-1 invisible">Action</label>
                     <button 
                       className="btn btn-outline-secondary w-100"
                       onClick={() => {
@@ -650,7 +674,7 @@
               </div>
               
               <div className="d-flex justify-content-center gap-2 mb-3 flex-wrap">
-                <button className="btn btn-outline-secondary btn-sm" onClick={goToToday} disabled={loading}>
+                <button className="btn btn-warning btn-sm fw-bold" style={{border: '3px solid #dc8b00'}} onClick={goToToday} disabled={loading}>
                   Hari Ini
                 </button>
                 <button 
@@ -661,7 +685,8 @@
                   Kalender
                 </button>
                 <button 
-                  className={`btn btn-sm ${view === 'list' ? 'btn-primary' : 'btn-outline-primary'}`}
+                  className={`btn btn-sm fw-bold ${view === 'list' ? 'btn-info' : 'btn-outline-info'}`}
+                  style={{border: view === 'list' ? '3px solid #0891b2' : '3px solid #06b6d4'}}
                   onClick={() => setView('list')}
                   disabled={loading}
                 >
@@ -827,11 +852,175 @@
               }
               
               body {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                background: linear-gradient(135deg, #5F9EA0 0%, #FAEBD7 100%);
                 min-height: 100vh;
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
                 margin: 0;
                 padding: 0;
+                transition: background 0.3s ease;
+              }
+
+              /* Dark Mode Styles */
+              .dark-mode {
+                color: #e0e0e0;
+              }
+
+              .dark-mode body,
+              body:has(.dark-mode) {
+                background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+              }
+
+              .dark-mode h1 {
+                color: #f0f0f0;
+              }
+
+              .dark-mode .controls-section {
+                background: #2d2d44;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+              }
+
+              .dark-mode .calendar-wrapper {
+                background: #2d2d44;
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+              }
+
+              .dark-mode .calendar-header {
+                background: #1e1e30;
+                border-bottom: 2px solid #3d3d5c;
+              }
+
+              .dark-mode .month-title {
+                color: #f0f0f0;
+              }
+
+              .dark-mode .day-header {
+                background: #1e1e30;
+                color: #b0b0b0;
+                border-bottom: 2px solid #3d3d5c;
+              }
+
+              .dark-mode .calendar-day {
+                background: #252538;
+                border: 1px solid #3d3d5c;
+              }
+
+              .dark-mode .calendar-day:hover {
+                background: #2d2d48;
+                border-color: #5d5d7c;
+              }
+
+              .dark-mode .calendar-day.other-month {
+                background-color: #1a1a2e;
+                opacity: 0.6;
+              }
+
+              .dark-mode .calendar-day.today {
+                background-color: #1e3a5f;
+              }
+
+              .dark-mode .day-number {
+                color: #d0d0d0;
+              }
+
+              .dark-mode .form-control {
+                background: #1e1e30;
+                border-color: #3d3d5c;
+                color: #e0e0e0;
+              }
+
+              .dark-mode .form-control:focus {
+                background: #252538;
+                border-color: #667eea;
+                color: #e0e0e0;
+              }
+
+              .dark-mode .form-control::placeholder {
+                color: #888;
+              }
+
+              .dark-mode .form-label {
+                color: #b0b0b0;
+              }
+
+              .dark-mode .list-group-item {
+                background: #252538;
+                border-color: #3d3d5c;
+                color: #e0e0e0;
+              }
+
+              .dark-mode .list-group-item:hover {
+                background: #2d2d48;
+                border-left-color: #667eea;
+              }
+
+              .dark-mode .modal-content {
+                background: #2d2d44;
+                color: #e0e0e0;
+              }
+
+              .dark-mode .modal-header {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                border-bottom: 1px solid #3d3d5c;
+              }
+
+              .dark-mode .modal-footer {
+                border-top: 1px solid #3d3d5c;
+              }
+
+              .dark-mode .btn-outline-light {
+                color: #f0f0f0;
+                border-color: #f0f0f0;
+              }
+
+              .dark-mode .btn-outline-light:hover {
+                background: #f0f0f0;
+                color: #1a1a2e;
+              }
+
+              .dark-mode .btn-outline-secondary {
+                color: #b0b0b0;
+                border-color: #3d3d5c;
+              }
+
+              .dark-mode .btn-outline-secondary:hover {
+                background: #3d3d5c;
+                color: #f0f0f0;
+              }
+
+              .dark-mode .btn-outline-primary {
+                color: #667eea;
+                border-color: #667eea;
+              }
+
+              .dark-mode .btn-outline-primary:hover {
+                background: #667eea;
+                color: white;
+              }
+
+              .dark-mode .btn-outline-info {
+                color: #06b6d4;
+                border-color: #06b6d4;
+              }
+
+              .dark-mode .btn-outline-info:hover {
+                background: #06b6d4;
+                color: white;
+              }
+
+              .dark-mode .more-events {
+                color: #888;
+              }
+
+              .dark-mode .spinner-border {
+                color: #667eea;
+              }
+
+              .dark-mode ::-webkit-scrollbar-track {
+                background: #1e1e30;
+              }
+
+              .dark-mode ::-webkit-scrollbar-thumb {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
               }
 
               .app-container {
